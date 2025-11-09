@@ -12,7 +12,7 @@ import time
 
 # Configurações
 VERSION_FILE = "hype_maps"  # Arquivo onde a versão será salva
-REPO_PATH = r"D:\GitHub\HypeMapas2025"  # Caminho do repositório a ser monitorado
+REPO_PATH = r"C:\Users\Administrator\Documents\GitHub\Hype-Creative-2025\resources\[maps]"  # Caminho do repositório a ser monitorado
 CHECK_INTERVAL = 10  # Intervalo em segundos entre verificações
 
 def run_git_command(command, check=True, cwd=None):
