@@ -200,123 +200,144 @@ def diagnose_auth_issue(current_dir):
     
     print("\n" + "=" * 50)
 
-def is_main_at_or_ahead_of_development():
-    """Verifica se a branch main está na mesma ou acima da branch development"""
+def are_last_15_dev_commits_in_main():
+    """Verifica se os 15 últimos commits da branch development estão presentes na branch main"""
     try:
         # Busca atualizações do remoto
         run_git_command("git fetch origin", check=False, cwd=REPO_PATH)
         
-        # Obtém os commits das branches main e development
-        main_commit, _, _ = run_git_command("git rev-parse origin/main", check=False, cwd=REPO_PATH)
-        if not main_commit:
-            # Tenta local
-            main_commit, _, _ = run_git_command("git rev-parse main", check=False, cwd=REPO_PATH)
-        
-        dev_commit, _, _ = run_git_command(f"git rev-parse origin/{REFERENCE_BRANCH}", check=False, cwd=REPO_PATH)
-        if not dev_commit:
-            # Tenta local
-            dev_commit, _, _ = run_git_command(f"git rev-parse {REFERENCE_BRANCH}", check=False, cwd=REPO_PATH)
-        
-        if not main_commit or not dev_commit:
-            print("Aviso: Não foi possível obter os commits das branches main e development")
-            return False
-        
-        # Se os commits são iguais, main está na mesma que development
-        if main_commit.strip() == dev_commit.strip():
-            print("Branch main está na mesma versão que development")
-            return True
-        
-        # Verifica se main está à frente de development
-        # Conta quantos commits main tem que development não tem
-        ahead_result, ahead_code, _ = run_git_command(
-            f"git rev-list --count {dev_commit}..{main_commit}",
+        # Obtém os 15 últimos commits da branch development
+        dev_commits_result, _, _ = run_git_command(
+            f"git log origin/{REFERENCE_BRANCH} -15 --format=%H",
             check=False,
             cwd=REPO_PATH
         )
         
-        if ahead_code == 0 and ahead_result:
-            ahead_count = int(ahead_result.strip()) if ahead_result.strip().isdigit() else 0
-            if ahead_count > 0:
-                print(f"Branch main está {ahead_count} commit(s) à frente de development")
-                return True
-            else:
-                # Se ahead_count é 0, verifica se development está à frente
-                behind_result, behind_code, _ = run_git_command(
-                    f"git rev-list --count {main_commit}..{dev_commit}",
-                    check=False,
-                    cwd=REPO_PATH
-                )
-                if behind_code == 0 and behind_result:
-                    behind_count = int(behind_result.strip()) if behind_result.strip().isdigit() else 0
-                    if behind_count > 0:
-                        print(f"Branch main está {behind_count} commit(s) atrás de development")
-                        return False
-                print("Branch main está na mesma versão que development")
-                return True
-        else:
-            # Se não conseguir contar, verifica usando merge-base
-            merge_base, _, _ = run_git_command(
-                f"git merge-base {main_commit} {dev_commit}",
+        if not dev_commits_result:
+            # Tenta local
+            dev_commits_result, _, _ = run_git_command(
+                f"git log {REFERENCE_BRANCH} -15 --format=%H",
                 check=False,
                 cwd=REPO_PATH
             )
-            if merge_base:
-                merge_base = merge_base.strip()
-                # Se o merge-base for igual ao dev_commit, main está à frente
-                if merge_base == dev_commit.strip():
-                    print("Branch main está à frente de development")
-                    return True
-                # Se o merge-base for igual ao main_commit, development está à frente
-                elif merge_base == main_commit.strip():
-                    print("Branch main está atrás de development")
-                    return False
-                # Se o merge-base for diferente de ambos, as branches divergiram
-                # Neste caso, verificamos se main tem o commit de development
-                _, is_ancestor_code, _ = run_git_command(
-                    f"git merge-base --is-ancestor {dev_commit} {main_commit}",
+        
+        if not dev_commits_result:
+            print("Aviso: Não foi possível obter os commits da branch development")
+            return False
+        
+        # Separa os commits (um por linha)
+        dev_commits = [commit.strip() for commit in dev_commits_result.split('\n') if commit.strip()]
+        
+        if len(dev_commits) == 0:
+            print("Aviso: Nenhum commit encontrado na branch development")
+            return False
+        
+        print(f"Verificando se os {len(dev_commits)} últimos commits de development estão na branch main...")
+        
+        # Verifica se cada commit está presente na branch main
+        main_commit, _, _ = run_git_command("git rev-parse origin/main", check=False, cwd=REPO_PATH)
+        if not main_commit:
+            main_commit, _, _ = run_git_command("git rev-parse main", check=False, cwd=REPO_PATH)
+        
+        if not main_commit:
+            print("Aviso: Não foi possível obter o commit da branch main")
+            return False
+        
+        commits_in_main = 0
+        commits_not_in_main = []
+        
+        for dev_commit in dev_commits:
+            # Verifica se o commit está presente na branch main
+            # Usa git branch --contains para verificar se main contém o commit
+            contains_result, contains_code, _ = run_git_command(
+                f"git branch --contains {dev_commit} origin/main",
+                check=False,
+                cwd=REPO_PATH
+            )
+            
+            # Se não encontrou no remoto, tenta local
+            if contains_code != 0 or not contains_result:
+                contains_result, contains_code, _ = run_git_command(
+                    f"git branch --contains {dev_commit} main",
                     check=False,
                     cwd=REPO_PATH
                 )
-                if is_ancestor_code == 0:  # Código 0 significa que dev é ancestral de main
-                    print("Branch main contém todos os commits de development")
-                    return True
-            print("Branch main não está na mesma ou acima de development")
+            
+            # Alternativa: verifica se o commit é ancestral de main
+            if contains_code != 0 or not contains_result:
+                _, is_ancestor_code, _ = run_git_command(
+                    f"git merge-base --is-ancestor {dev_commit} {main_commit.strip()}",
+                    check=False,
+                    cwd=REPO_PATH
+                )
+                if is_ancestor_code == 0:
+                    commits_in_main += 1
+                    print(f"  ✓ Commit {dev_commit[:8]} está na branch main")
+                else:
+                    commits_not_in_main.append(dev_commit[:8])
+                    print(f"  ✗ Commit {dev_commit[:8]} NÃO está na branch main")
+            else:
+                commits_in_main += 1
+                print(f"  ✓ Commit {dev_commit[:8]} está na branch main")
+        
+        # Se todos os commits estão na main, retorna True
+        if commits_in_main == len(dev_commits):
+            print(f"✓ Todos os {len(dev_commits)} últimos commits de development estão na branch main")
+            return True
+        else:
+            print(f"⚠ Apenas {commits_in_main} de {len(dev_commits)} últimos commits de development estão na branch main")
+            if commits_not_in_main:
+                print(f"  Commits faltando: {', '.join(commits_not_in_main)}")
             return False
             
     except Exception as e:
-        print(f"Erro ao verificar se main está na mesma ou acima de development: {e}")
+        print(f"Erro ao verificar se os últimos commits de development estão na main: {e}")
         return False
 
 def commit_fxmanifest_in_repo(version_string):
-    """Faz commit e push do fxmanifest.lua no repositório monitorado na branch main"""
+    """Faz commit e push do fxmanifest.lua no repositório onde o arquivo está localizado (branch main)"""
     current_branch = None
     try:
-        # Verifica se o fxmanifest.lua está no repositório monitorado
+        # Verifica se o fxmanifest.lua existe
         if not os.path.exists(FXMANIFEST_PATH):
-            print("Aviso: fxmanifest.lua não encontrado, pulando commit no repositório monitorado")
+            print("Aviso: fxmanifest.lua não encontrado, pulando commit")
             return False
         
-        # Obtém o caminho relativo do fxmanifest.lua em relação ao REPO_PATH
-        fxmanifest_rel_path = os.path.relpath(FXMANIFEST_PATH, REPO_PATH)
+        # Encontra o repositório Git onde o fxmanifest.lua está localizado
+        fxmanifest_dir = os.path.dirname(FXMANIFEST_PATH)
+        fxmanifest_repo_path = None
         
-        # Verifica se o arquivo está dentro do repositório monitorado
-        if fxmanifest_rel_path.startswith('..'):
-            print("Aviso: fxmanifest.lua não está dentro do repositório monitorado")
+        # Procura pelo diretório .git subindo na hierarquia
+        search_path = fxmanifest_dir
+        while search_path and search_path != os.path.dirname(search_path):
+            git_path = os.path.join(search_path, ".git")
+            if os.path.exists(git_path):
+                fxmanifest_repo_path = search_path
+                break
+            search_path = os.path.dirname(search_path)
+        
+        if not fxmanifest_repo_path:
+            print(f"Erro: Não foi possível encontrar repositório Git para {FXMANIFEST_PATH}")
             return False
         
-        print(f"\nFazendo commit do fxmanifest.lua no repositório monitorado (branch: main)...")
+        print(f"Repositório do fxmanifest.lua encontrado: {fxmanifest_repo_path}")
+        
+        # Obtém o caminho relativo do fxmanifest.lua em relação ao repositório encontrado
+        fxmanifest_rel_path = os.path.relpath(FXMANIFEST_PATH, fxmanifest_repo_path)
+        
+        print(f"\nFazendo commit do fxmanifest.lua no repositório: {fxmanifest_repo_path} (branch: main)...")
         
         # Salva a branch atual antes de mudar
-        current_branch, _, _ = run_git_command("git branch --show-current", check=False, cwd=REPO_PATH)
+        current_branch, _, _ = run_git_command("git branch --show-current", check=False, cwd=fxmanifest_repo_path)
         if not current_branch:
-            current_branch, _, _ = run_git_command("git rev-parse --abbrev-ref HEAD", check=False, cwd=REPO_PATH)
+            current_branch, _, _ = run_git_command("git rev-parse --abbrev-ref HEAD", check=False, cwd=fxmanifest_repo_path)
         
         # Faz checkout para a branch main
         print("Alterando para a branch main...")
         checkout_result, checkout_code, checkout_stderr = run_git_command(
             "git checkout main",
             check=False,
-            cwd=REPO_PATH
+            cwd=fxmanifest_repo_path
         )
         
         if checkout_code != 0:
@@ -326,7 +347,7 @@ def commit_fxmanifest_in_repo(version_string):
             checkout_result, checkout_code, checkout_stderr = run_git_command(
                 "git checkout -b main",
                 check=False,
-                cwd=REPO_PATH
+                cwd=fxmanifest_repo_path
             )
             if checkout_code != 0:
                 print(f"Erro ao criar branch main: {checkout_stderr}")
@@ -335,7 +356,7 @@ def commit_fxmanifest_in_repo(version_string):
         print("Branch main selecionada com sucesso!")
         
         # Verifica se há mudanças no fxmanifest.lua
-        status_result, _, _ = run_git_command("git status --porcelain", check=False, cwd=REPO_PATH)
+        status_result, _, _ = run_git_command("git status --porcelain", check=False, cwd=fxmanifest_repo_path)
         normalized_status = status_result.replace('\\', '/') if status_result else ""
         normalized_path = fxmanifest_rel_path.replace('\\', '/')
         
@@ -350,7 +371,7 @@ def commit_fxmanifest_in_repo(version_string):
             ls_result, _, _ = run_git_command(
                 f"git ls-files --error-unmatch \"{fxmanifest_rel_path}\"",
                 check=False,
-                cwd=REPO_PATH
+                cwd=fxmanifest_repo_path
             )
             if ls_result is None:
                 # Arquivo não está sendo rastreado, precisa ser adicionado
@@ -367,7 +388,7 @@ def commit_fxmanifest_in_repo(version_string):
             show_result, _, _ = run_git_command(
                 f"git show HEAD:\"{fxmanifest_rel_path}\"",
                 check=False,
-                cwd=REPO_PATH
+                cwd=fxmanifest_repo_path
             )
             if show_result:
                 # Extrai a versão antiga do conteúdo do arquivo no HEAD
@@ -380,7 +401,7 @@ def commit_fxmanifest_in_repo(version_string):
                 diff_result, _, _ = run_git_command(
                     f"git diff HEAD -- \"{fxmanifest_rel_path}\"",
                     check=False,
-                    cwd=REPO_PATH
+                    cwd=fxmanifest_repo_path
                 )
                 if diff_result:
                     # Extrai a versão antiga do diff (linha com -)
@@ -391,16 +412,16 @@ def commit_fxmanifest_in_repo(version_string):
             pass
         
         # Adiciona o arquivo (mesmo que não tenha mudanças, adiciona para garantir)
-        add_result, add_code, _ = run_git_command(f"git add \"{fxmanifest_rel_path}\"", check=False, cwd=REPO_PATH)
+        add_result, add_code, _ = run_git_command(f"git add \"{fxmanifest_rel_path}\"", check=False, cwd=fxmanifest_repo_path)
         if add_result is None or add_code != 0:
-            print("Aviso: Problema ao adicionar fxmanifest.lua ao staging no repositório monitorado")
+            print("Aviso: Problema ao adicionar fxmanifest.lua ao staging")
             # Volta para a branch original em caso de erro
             if current_branch and current_branch != "main":
-                run_git_command(f"git checkout {current_branch}", check=False, cwd=REPO_PATH)
+                run_git_command(f"git checkout {current_branch}", check=False, cwd=fxmanifest_repo_path)
             return False
         
         # Verifica se há algo para commitar após adicionar
-        status_after_add, _, _ = run_git_command("git status --porcelain", check=False, cwd=REPO_PATH)
+        status_after_add, _, _ = run_git_command("git status --porcelain", check=False, cwd=fxmanifest_repo_path)
         has_staged_changes = status_after_add and any(
             line.strip().startswith(('M', 'A', 'D')) and normalized_path in line
             for line in status_after_add.split('\n')
@@ -423,7 +444,7 @@ def commit_fxmanifest_in_repo(version_string):
         commit_result, commit_code, commit_stderr = run_git_command(
             f'git commit -m "{commit_message}"',
             check=False,
-            cwd=REPO_PATH
+            cwd=fxmanifest_repo_path
         )
         
         if commit_result is None or commit_code != 0:
@@ -433,7 +454,7 @@ def commit_fxmanifest_in_repo(version_string):
                 # Mesmo sem commit, consideramos sucesso pois o arquivo já está correto
                 # Volta para a branch original
                 if current_branch and current_branch != "main":
-                    run_git_command(f"git checkout {current_branch}", check=False, cwd=REPO_PATH)
+                    run_git_command(f"git checkout {current_branch}", check=False, cwd=fxmanifest_repo_path)
                 return True  # Retorna True porque não há erro, apenas não há mudanças
             else:
                 print("Aviso: Problema ao fazer commit do fxmanifest.lua na branch main")
@@ -441,7 +462,7 @@ def commit_fxmanifest_in_repo(version_string):
                     print(f"Detalhes: {commit_stderr}")
                 # Volta para a branch original em caso de erro
                 if current_branch and current_branch != "main":
-                    run_git_command(f"git checkout {current_branch}", check=False, cwd=REPO_PATH)
+                    run_git_command(f"git checkout {current_branch}", check=False, cwd=fxmanifest_repo_path)
                 return False
         
         print("Commit do fxmanifest.lua realizado com sucesso na branch main!")
@@ -451,7 +472,7 @@ def commit_fxmanifest_in_repo(version_string):
         push_result, push_code, push_stderr = run_git_command(
             "git push origin main",
             check=False,
-            cwd=REPO_PATH
+            cwd=fxmanifest_repo_path
         )
         
         if push_result is None or push_code != 0:
@@ -460,7 +481,7 @@ def commit_fxmanifest_in_repo(version_string):
                 print(f"Erro detalhado: {push_stderr}")
             # Volta para a branch original em caso de erro
             if current_branch and current_branch != "main":
-                run_git_command(f"git checkout {current_branch}", check=False, cwd=REPO_PATH)
+                run_git_command(f"git checkout {current_branch}", check=False, cwd=fxmanifest_repo_path)
             return False
         
         print("Push do fxmanifest.lua realizado com sucesso na branch main!")
@@ -469,16 +490,27 @@ def commit_fxmanifest_in_repo(version_string):
         # Volta para a branch original se necessário
         if current_branch and current_branch != "main":
             print(f"Voltando para a branch original: {current_branch}")
-            run_git_command(f"git checkout {current_branch}", check=False, cwd=REPO_PATH)
+            run_git_command(f"git checkout {current_branch}", check=False, cwd=fxmanifest_repo_path)
         
         return True
         
     except Exception as e:
-        print(f"Erro ao fazer commit do fxmanifest.lua no repositório monitorado: {e}")
+        print(f"Erro ao fazer commit do fxmanifest.lua: {e}")
         # Tenta voltar para a branch original em caso de erro
         try:
             if current_branch and current_branch != "main":
-                run_git_command(f"git checkout {current_branch}", check=False, cwd=REPO_PATH)
+                # Tenta encontrar o repositório novamente
+                fxmanifest_dir = os.path.dirname(FXMANIFEST_PATH)
+                search_path = fxmanifest_dir
+                fxmanifest_repo_path = None
+                while search_path and search_path != os.path.dirname(search_path):
+                    git_path = os.path.join(search_path, ".git")
+                    if os.path.exists(git_path):
+                        fxmanifest_repo_path = search_path
+                        break
+                    search_path = os.path.dirname(search_path)
+                if fxmanifest_repo_path:
+                    run_git_command(f"git checkout {current_branch}", check=False, cwd=fxmanifest_repo_path)
         except:
             pass
         return False
@@ -628,13 +660,13 @@ def run_check():
         print(f"Erro: O diretório {REPO_PATH} não é um repositório Git!")
         return False
     
-    # Verifica periodicamente se main está na mesma ou acima de development
-    print("Verificando se branch main está na mesma ou acima de development...")
-    main_at_or_ahead = is_main_at_or_ahead_of_development()
-    if main_at_or_ahead:
-        print("✓ Branch main está na mesma ou acima de development")
+    # Verifica periodicamente se os 15 últimos commits de development estão na main
+    print("Verificando se os 15 últimos commits de development estão na branch main...")
+    should_update_fxmanifest = are_last_15_dev_commits_in_main()
+    if should_update_fxmanifest:
+        print("✓ Todos os últimos commits de development estão na branch main - fxmanifest será atualizado")
     else:
-        print("⚠ Branch main está atrás de development")
+        print("⚠ Nem todos os últimos commits de development estão na branch main - fxmanifest NÃO será atualizado")
     print("-" * 50)
     
     # Obtém o hash do commit atual do repositório monitorado
@@ -694,8 +726,8 @@ def run_check():
         commit_success = True  # Considera sucesso pois não havia mudanças para commitar
     
     # DEPOIS: Atualiza o fxmanifest.lua na branch main independentemente do hype_maps
-    # Isso acontece periodicamente sempre que main estiver na mesma ou acima de development
-    if main_at_or_ahead:
+    # Isso acontece periodicamente se os 5 últimos commits de development estiverem na main
+    if should_update_fxmanifest:
         print("\n3. Verificando e atualizando fxmanifest.lua na branch main (independente do hype_maps)...")
         # Atualiza o fxmanifest.lua com a hash e informações da versão (mesma que foi usada no hype_maps)
         fxmanifest_changed = update_fxmanifest(version_string)
@@ -711,7 +743,7 @@ def run_check():
         print("\n4. Fazendo commit do fxmanifest.lua na branch main...")
         commit_fxmanifest_in_repo(version_string)
     else:
-        print("fxmanifest.lua não será atualizado: branch main está atrás de development")
+        print("fxmanifest.lua não será atualizado: nem todos os últimos commits de development estão na branch main")
     
     if commit_success:
         print("\n" + "=" * 50)
