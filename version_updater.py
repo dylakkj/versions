@@ -13,6 +13,7 @@ import time
 # Configurações
 VERSION_FILE = "hype_maps"  # Arquivo onde a versão será salva
 REPO_PATH = r"C:\Users\Administrator\Documents\GitHub\Hype-Creative-2025\resources\[maps]"  # Caminho do repositório a ser monitorado
+REFERENCE_BRANCH = "development"  # Branch de referência para geração do hash
 CHECK_INTERVAL = 10  # Intervalo em segundos entre verificações
 
 def run_git_command(command, check=True, cwd=None):
@@ -39,14 +40,14 @@ def run_git_command(command, check=True, cwd=None):
 
 def check_git_updates():
     """Verifica se há atualizações no repositório remoto"""
-    print("Verificando atualizações no repositório...")
+    print(f"Verificando atualizações no repositório (branch: {REFERENCE_BRANCH})...")
     
     # Busca atualizações do remoto
     run_git_command("git fetch origin", check=False)
     
-    # Compara branch local com remoto
-    local_commit, _, _ = run_git_command("git rev-parse HEAD")
-    remote_commit, _, _ = run_git_command("git rev-parse origin/$(git branch --show-current)")
+    # Compara branch de referência local com remoto
+    local_commit, _, _ = run_git_command(f"git rev-parse {REFERENCE_BRANCH}")
+    remote_commit, _, _ = run_git_command(f"git rev-parse origin/{REFERENCE_BRANCH}")
     
     if local_commit and remote_commit:
         if local_commit != remote_commit:
@@ -68,16 +69,24 @@ def check_git_updates():
         return True, local_commit
 
 def get_commit_hash():
-    """Obtém o hash do último commit"""
-    commit_hash, _, _ = run_git_command("git rev-parse HEAD")
+    """Obtém o hash do último commit da branch de referência"""
+    # Tenta pegar da branch remota primeiro, depois local
+    commit_hash, _, _ = run_git_command(f"git rev-parse origin/{REFERENCE_BRANCH}")
+    if not commit_hash:
+        # Se não encontrar no remoto, tenta local
+        commit_hash, _, _ = run_git_command(f"git rev-parse {REFERENCE_BRANCH}")
     if commit_hash:
         # Retorna primeiros 7 caracteres em maiúsculas
         return commit_hash[:7].upper()
     return None
 
 def get_commit_date():
-    """Obtém a data do último commit"""
-    date_str, _, _ = run_git_command("git log -1 --format=%cd --date=format:%d.%m-%H.%M")
+    """Obtém a data do último commit da branch de referência"""
+    # Tenta pegar da branch remota primeiro, depois local
+    date_str, _, _ = run_git_command(f"git log -1 origin/{REFERENCE_BRANCH} --format=%cd --date=format:%d.%m-%H.%M")
+    if not date_str:
+        # Se não encontrar no remoto, tenta local
+        date_str, _, _ = run_git_command(f"git log -1 {REFERENCE_BRANCH} --format=%cd --date=format:%d.%m-%H.%M")
     return date_str if date_str else datetime.now().strftime("%d.%m-%H.%M")
 
 def create_version_string(commit_hash, date_str):
